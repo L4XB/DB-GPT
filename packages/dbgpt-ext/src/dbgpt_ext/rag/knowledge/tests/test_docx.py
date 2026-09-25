@@ -1,5 +1,6 @@
 import docx
 from docx.oxml import parse_xml
+from docx.shared import Inches
 
 from ..docx import DocxKnowledge
 
@@ -58,6 +59,10 @@ def test_plain_paragraphs_load_exactly_as_before(tmp_path):
     document.add_paragraph("First line\twith a tab")
     document.add_paragraph("")
     document.add_paragraph("Second").add_run().add_break()
+    # A tab stop is a w:tab in the paragraph properties, not text.
+    document.add_paragraph("Tab stop").paragraph_format.tab_stops.add_tab_stop(
+        Inches(1)
+    )
     file_path = _save(document, tmp_path)
 
     expected = "\n".join(p.text for p in docx.Document(file_path).paragraphs)
@@ -151,3 +156,32 @@ def test_ruby_base_text_loads_without_its_guide(tmp_path):
     )
 
     assert _load_text(file_path) == "漢字"
+
+
+def test_ruby_base_text_stays_between_the_text_around_it(tmp_path):
+    file_path = _docx_with_body(
+        tmp_path,
+        "<w:p><w:r><w:t>A</w:t><w:ruby><w:rubyPr/>"
+        f"<w:rt>{_run('guide')}</w:rt><w:rubyBase>{_run('B')}</w:rubyBase>"
+        "</w:ruby><w:t>C</w:t></w:r></w:p>",
+    )
+
+    assert _load_text(file_path) == "ABC"
+
+
+def test_tracked_row_and_cell_deletions_do_not_load(tmp_path):
+    def cell(text: str, properties: str = "") -> str:
+        return f"<w:tc>{properties}<w:p>{_run(text)}</w:p></w:tc>"
+
+    deleted_row = '<w:trPr><w:del w:id="1" w:author="a"/></w:trPr>'
+    deleted_cell = '<w:tcPr><w:cellDel w:id="2" w:author="a"/></w:tcPr>'
+    file_path = _docx_with_body(
+        tmp_path,
+        "<w:tbl>"
+        + f"<w:tr>{cell('Name')}{cell('Role')}</w:tr>"
+        + f"<w:tr>{deleted_row}{cell('Old')}{cell('Row')}</w:tr>"
+        + f"<w:tr>{cell('Ada')}{cell('Gone', deleted_cell)}{cell('Engineer')}</w:tr>"
+        + "</w:tbl>",
+    )
+
+    assert _load_text(file_path) == "Name | Role\nAda | Engineer"

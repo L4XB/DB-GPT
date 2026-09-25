@@ -24,6 +24,10 @@ _WRAPPERS = frozenset({f"{_W}sdt", f"{_W}customXml"})
 _SKIPPED_RUN_ANCESTORS = frozenset(
     {f"{_W}del", f"{_W}moveFrom", f"{_W}rt", f"{_W}txbxContent", _MC_FALLBACK}
 )
+# The run children python-docx's Run.text reads, each as the text it stands for.
+_RUN_TEXT_TAGS = tuple(
+    f"{_W}{tag}" for tag in ("br", "cr", "noBreakHyphen", "ptab", "t", "tab")
+)
 
 
 def _docx_blocks(container: Any) -> Iterator[str]:
@@ -46,10 +50,13 @@ def _docx_blocks(container: Any) -> Iterator[str]:
 
 
 def _paragraph_text(paragraph: Any) -> str:
+    # Read the text elements themselves in document order, so a ruby base nested
+    # inside a run stays between the text before and after it.
     return "".join(
-        run.text
-        for run in paragraph.iter(f"{_W}r")
-        if not _has_ancestor(run, paragraph, _SKIPPED_RUN_ANCESTORS)
+        str(element)
+        for element in paragraph.iter(*_RUN_TEXT_TAGS)
+        if element.getparent().tag == f"{_W}r"
+        and not _has_ancestor(element, paragraph, _SKIPPED_RUN_ANCESTORS)
     )
 
 
@@ -64,12 +71,22 @@ def _text_boxes(paragraph: Any) -> Iterator[Any]:
 def _table_text(table: Any) -> str:
     rows = []
     for row in _children(table, "tr"):
+        # A tracked row or cell deletion is marked in its properties rather than
+        # around its content.
+        if _is_marked(row, "trPr", "del"):
+            continue
         cells = (
             " ".join(block for block in _docx_blocks(cell) if block).replace("\n", " ")
             for cell in _children(row, "tc")
+            if not _is_marked(cell, "tcPr", "cellDel")
         )
         rows.append(" | ".join(cells))
     return "\n".join(rows)
+
+
+def _is_marked(element: Any, properties: str, marker: str) -> bool:
+    found = element.find(f"{_W}{properties}")
+    return found is not None and found.find(f"{_W}{marker}") is not None
 
 
 def _children(parent: Any, tag: str) -> Iterator[Any]:
